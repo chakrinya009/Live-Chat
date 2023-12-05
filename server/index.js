@@ -1,21 +1,77 @@
-const { Server } = require("socket.io");
+const express = require("express");
+const dotenv = require("dotenv");
+const { default: mongoose } = require("mongoose");
+const app = express();
+const cors = require("cors");
+const { notFound, errorHandler } = require("./middleware/errorMiddleware");
 
-const io = new Server(8000, {
-  cors: true,
+app.use(
+  cors({
+    origin: "*",
+  })
+);
+dotenv.config();
+
+app.use(express.json());
+
+const userRoutes = require("./Routes/userRoutes");
+const chatRoutes = require("./Routes/chatRoutes");
+const messageRoutes = require("./Routes/messageRoutes");
+
+const connectDb = async () => {
+  try {
+    const connect = await mongoose.connect(process.env.MONGO_URI);
+    console.log("Server is Connected to Database");
+  } catch (err) {
+    console.log("Server is NOT connected to Database", err.message);
+  }
+};
+connectDb();
+
+app.get("/", (req, res) => {
+  res.send("API is running123");
 });
 
-const emailToSocketIdMap = new Map();
-const socketidToEmailMap = new Map();
+app.use("/user", userRoutes);
+app.use("/chat", chatRoutes);
+app.use("/message", messageRoutes);
+
+// Error Handling middlewares
+app.use(notFound);
+app.use(errorHandler);
+
+const PORT = process.env.PORT || 5000;
+const server = app.listen(PORT, console.log("Server is Running..."));
+
+const io = require("socket.io")(server, {
+  cors: {
+    origin: "*",
+  },
+  pingTimeout: 60000,
+});
 
 io.on("connection", (socket) => {
-  console.log("Socket connected", socket.id);
-  socket.on("room:join", (data) => {
-    console.log(data);
-    const { email, room } = data;
-    emailToSocketIdMap.set(email, socket.id);
-    socketidToEmailMap.set(socket.id, email);
-    io.to(room).emit("user:joined", { email, id: socket.id });
+  socket.on("setup", (user) => {
+    socket.join(user.data._id);
+
+    socket.emit("connected");
+  });
+
+  socket.on("join chat", (room) => {
     socket.join(room);
-    io.to(socket.id).emit("room:join", data);
+  });
+
+  socket.on("new message", (newMessageStatus) => {
+    var chat = newMessageStatus.chat;
+
+    if (!chat.users) {
+      return console.log("chat.users not working");
+    }
+
+    chat.users.forEach((user) => {
+      if (user._id == newMessageStatus.sender._id) return;
+
+      socket.in(user._id).emit("message recieved", newMessageStatus);
+    });
   });
 });
